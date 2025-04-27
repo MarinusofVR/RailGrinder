@@ -1,5 +1,6 @@
 using Newtonsoft.Json.Linq;
 using System;
+using System.ComponentModel.DataAnnotations;
 using System.IO;
 using System.Net;
 using System.Reflection;
@@ -16,9 +17,8 @@ namespace RailGrinder
         //to-do: Improve the ROI calculation: Stats-based??
         //to-do: Adjust ROI for missed notes somehow
         //to-do: Filter all but the top-score for each user for different mod combos in spiral & spin
-        //to-do: Generate spin/spiral leaderboards
         //to-do: Improve spin query to capture all common mod combos
-        //to-do: Calculate averages for spin/spiral
+        //to-do: Shift ALL calls to the scores api to permit faster calls of up to 100 scores per api call.
 
         static string cmd_template = """https://synthriderz.com/api/rankings?s={"mode":§mode§,"difficulty":§difficulty§,"modifiers":§modifiers§,"profile.id":§id§}&page=1&limit=10&sort=rank,ASC""";
 
@@ -40,12 +40,19 @@ namespace RailGrinder
         static string all_leaderboards_template = """https://synthriderz.com/api/leaderboards?join[]=beatmap&page=§page§&limit=100&s={"$and":[{"beatmap.published":true},{"mode":§mode§},{"difficulty":§difficulty§},{"beatmap.ost":true},{"challenge":0}]}""";
 
 
-
+        //Declare the variables for leaderboard overall metrics
         static double average_poor = 0;
         static double average_good = 0;
         static double average_perfect = 0;
         static double average_accuracy = 0;
         static double average_rank = 0;
+        static double average_rank_combined = 0;
+        static double stddev_poor = 0;
+        static double stddev_good = 0;
+        static double stddev_perfect = 0;
+        static double stddev_accuracy = 0;
+        static double stddev_rank = 0;
+        static double stddev_rank_combined = 0;
 
         static async Task Main(string[] args)
         {
@@ -77,12 +84,14 @@ namespace RailGrinder
             int userid = 224725;
             int difficulty = 4;
             int mode = 1;
-            string modifiers = "0";
+            string modifier = "0";  //What the user enters
+            string modifiers = "0"; //What the user's value is converted into for the api query
             bool played = true;
             bool average = false;
             string dm;
             int rank;
-            string modifier ="0";
+            string username = "";
+            string SummaryHeading = "";
 
             // Pair each modifier value with its textual name:
             (int Value, string Name)[] ModifierMap =
@@ -126,6 +135,7 @@ namespace RailGrinder
                 // **************************************************************************************
                 // Execute this analysis based on command line arguments
                 // **************************************************************************************
+                // Note: This has not been tested since initiating major revisions and may not be fully functional.
                 if (args.Length > 3)
                 {
                     userid = Convert.ToInt32(args[0]);
@@ -263,10 +273,8 @@ namespace RailGrinder
                     Console.WriteLine("Select Modifiers: ");
                     Console.WriteLine("1: No Modifiers");
                     Console.WriteLine("2: Combined Overall");
-                    Console.ForegroundColor = ConsoleColor.Gray;
                     Console.WriteLine("3: Spin (all) - still under development and not yet fully functional.");
                     Console.WriteLine("4: Spiral (all) - still under development and not yet fully functional.");
-                    Console.ForegroundColor = ConsoleColor.White;
                     do
                     {
                         invalid = false;
@@ -281,10 +289,8 @@ namespace RailGrinder
                         //    leaderboards api call requires modifiers=-1 [This is the last api called by this program, so we'll change the value of this variable from "{}" to "-1" before we query the api]
                         //
                         //Spin/Spiral:
-                        //    The $in code here was an attempt to add support for combined Spin(all) and combined Spiral(all) rankings and analysis. the $in method works for leaderboard api, but fails for the ranking api.
-                        //    Unfortunately, Synthriderz only has two ranking lists (no mods and combined) and no way to filter out others, so there is no way for this method to work at present like it does for 0 & {}.
-                        //    I commented out the code vs deleting as it may help further future development of spin & spiral tools, but it will require additional changes to the approach since we can't use Z ranking lists
-                        //    For now, we will use Combined leaderboards calls to validate the player.id and add additional filters later for maps that have not yet been played in spin/spiral.
+                        //    The $in code with brute force lists of every possible Spiral modifier combination and most Spin modifiers permits combined Spin(all) and combined Spiral(all) rankings and analysis.
+                        //    More advanced bit logic methods are used for filtering personal leaderboard once the full leaderboard is compiled to a single array.
                         //
                         //Note: The $in list is not 100% comprehensive, and only represents the most common modes used by scorechasers (2x, 3x, big, small).
                         //Every additional will double the length of the list. Maybe that's OK? Prisma, halo, nowalls, and nofail are presently excluded.
@@ -332,7 +338,7 @@ namespace RailGrinder
                     do
                     {
                         invalid = false;
-                        string username = Console.ReadLine();
+                        username = Console.ReadLine();
 
                         try
                         {
@@ -369,7 +375,7 @@ namespace RailGrinder
                             if (rankings.Count > 0)
                             {
                                 //This is not giving accurate values for combined leaderboards. I think it's including mods other than the top combined score.
-                                //We'll probably need to recalculate this for each mode. 
+                                //We recalculate this later for the specific selections. But it's negligible compute cost to leave it alone here vs risking breaking something.
                                 userid = rankings[index].profile.id;
                                 average_rank = rankings[index].rank_avg;
 
@@ -392,6 +398,19 @@ namespace RailGrinder
                         }
                     } while (invalid);
                 }
+                SummaryHeading = username + ": ";
+                if (mode == 0) { SummaryHeading = SummaryHeading + "Rhythm, "; }
+                if (mode == 1) { SummaryHeading = SummaryHeading + "Force, "; };
+                if (difficulty == 0) { SummaryHeading = SummaryHeading + "Easy, "; }
+                if (difficulty == 1) { SummaryHeading = SummaryHeading + "Normal, "; }
+                if (difficulty == 2) { SummaryHeading = SummaryHeading + "Hard, "; }
+                if (difficulty == 3) { SummaryHeading = SummaryHeading + "Expert, "; }
+                if (difficulty == 4) { SummaryHeading = SummaryHeading + "Master, "; }
+                if (modifier == "1") { SummaryHeading = SummaryHeading + "No Modifers"; }
+                if (modifier == "2") { SummaryHeading = SummaryHeading + "Overall Combined Modifers"; }
+                if (modifier == "3") { SummaryHeading = SummaryHeading + "Spin (all)"; }
+                if (modifier == "4") { SummaryHeading = SummaryHeading + "Spiral (all)"; }
+
 
                 // **************************************************************************************
                 // Build a list of all maps the user has played in the selected  difficulty/mode/mods
@@ -403,69 +422,81 @@ namespace RailGrinder
                 Console.WriteLine("");
                 Console.WriteLine("Loading Personal Leaderboards (100 scores per page)");
 
-                //We need to run this first section to calculate averages, too.  We can probably push the if(!average){ down further.
+                //v1 pulled averages from the api, but these were only accurate for the nomods leaderboard. We want better statistical data anyway.
+
+                //if (!average)
+                //{
+                int page = 0;
+                int pages = 0;
+
+                do
+                {
+                    page++;
+                    //Console.WriteLine("Personal Leaderboard page: " + page + " of " + pages);
+                    Console.Write("Personal Leaderboard page: " + page + " of ");
+                    string req = personal_template;
+                    req = req.Replace("§page§", page.ToString());
+                    req = req.Replace("§userid§", userid.ToString());
+                    req = req.Replace("§difficulty§", difficulty.ToString());
+                    req = req.Replace("§mode§", mode.ToString());
+                    req = req.Replace("§modifiers§", modifiers);
+                    //Console.WriteLine("Personal_template:" + req);
+
+                    string resp = await client.DownloadStringTaskAsync(req);
+                    dynamic res_data = JObject.Parse(resp);
+
+                    personal_leaderboard.AddRange(res_data.data);
+                    page = res_data.page;
+                    pages = res_data.pageCount;
+                    Console.WriteLine(pages);
+                } while (page < pages);
+
+                // the Z.api response includes a line for every modified combination the player has set a score on. We only care about the best of these.
+                // We will sort the personal leaderboard by modified_score descending to get the top scores first, and discard the rest.
+                // the req api call is hardcoded to sort by rank, so no sort or filter is necessary here for nomods.
+                if (modifier == "3")
+                {
+                    // SPIN
+                    // Filter for spin bits (1, 2, 4, 8), and sort descending by modified score, best scores first.
+                    personal_leaderboard = personal_leaderboard.Where(x => ((int)x.modifiers & (1 | 2 | 4 | 8)) != 0).GroupBy(x => x.leaderboard.beatmap.id).Select(x => x.OrderByDescending(y => y.modified_score).FirstOrDefault()).ToList();
+                }
+                else if (modifier == "4")
+                {
+                    // SPIRAL
+                    // Filter for spiral bits (SpinMild = 131072, SpiralStyled = 262144, SpiralWild = 524288), and sort descending by modified score, best scores first.
+                    personal_leaderboard = personal_leaderboard.Where(x => ((int)x.modifiers & (131072 | 262144 | 524288)) != 0).GroupBy(x => x.leaderboard.beatmap.id).Select(x => x.OrderByDescending(y => y.modified_score).FirstOrDefault()).ToList();
+                }
+                else //if (modifier == "2") or anything else, just give the combined leaderboard. All queries, whether nomod, single mod, or combinations, can be sorted by modified_score.
+                {
+                    // COMBINED
+                    personal_leaderboard = personal_leaderboard.GroupBy(x => x.leaderboard.beatmap.id).Select(x => x.OrderByDescending(y => y.modified_score).Where(x => x.modified_score > 0).First()).ToList();
+                }
+
+
+                //RECALCULATE AVERAGES HERE FROM PERSONAL LEADERBOARD
+                //Relevant scores api json fields: rank, rank_combined, good_hit_percent, poor_hit_percent, perfect_hit_percent, [ notes_hit & max_combo ]
+                if (modifier == "1")
+                {
+                    average_rank = personal_leaderboard.Average(x => (double)((JToken)x)["rank"]);
+                    stddev_rank = StandardDeviation(personal_leaderboard.Select(x => (double)((JToken)x)["rank"]));
+                }
+                else if (modifier == "2")
+                {
+                    average_rank_combined = personal_leaderboard.Average(x => (double)((JToken)x)["rank_combined"]);
+                    stddev_rank_combined = StandardDeviation(personal_leaderboard.Select(x => (double)((JToken)x)["rank_combined"]));
+                } //We need to recalculate spin & spiral ranks before we can calculate statistics. They will sit at 0 for now.
+
+                average_poor = personal_leaderboard.Average(x => (double)((JToken)x)["poor_hit_percent"]);
+                average_good = personal_leaderboard.Average(x => (double)((JToken)x)["good_hit_percent"]);
+                average_perfect = personal_leaderboard.Average(x => (double)((JToken)x)["perfect_hit_percent"]);
+                stddev_poor = StandardDeviation(personal_leaderboard.Select(x => (double)((JToken)x)["poor_hit_percent"]));
+                stddev_good = StandardDeviation(personal_leaderboard.Select(x => (double)((JToken)x)["good_hit_percent"]));
+                stddev_perfect = StandardDeviation(personal_leaderboard.Select(x => (double)((JToken)x)["perfect_hit_percent"]));
+                average_accuracy = average_poor * 0.25 + average_good * 0.5 + average_perfect;
+                stddev_accuracy = stddev_poor * 0.25 + stddev_good * 0.5 + stddev_perfect;
+
                 if (!average)
                 {
-                    int page = 0;
-                    int pages = 0;
-
-                    do
-                    {
-                        page++;
-                        //Console.WriteLine("Personal Leaderboard page: " + page + " of " + pages);
-                        Console.Write("Personal Leaderboard page: " + page + " of ");
-                        string req = personal_template;
-                        req = req.Replace("§page§", page.ToString());
-                        req = req.Replace("§userid§", userid.ToString());
-                        req = req.Replace("§difficulty§", difficulty.ToString());
-                        req = req.Replace("§mode§", mode.ToString());
-                        req = req.Replace("§modifiers§", modifiers);
-                        //Console.WriteLine("Personal_template:" + req);
-
-                        string resp = await client.DownloadStringTaskAsync(req);
-                        dynamic res_data = JObject.Parse(resp);
-
-                        personal_leaderboard.AddRange(res_data.data);
-                        page = res_data.page;
-                        pages = res_data.pageCount;
-                        Console.WriteLine(pages);
-                    } while (page < pages);
-
-                    // Z will the top scores of all moves with modifiers={}, but the first of any map listed is the one that counts.
-                    // but we can sort the personal leaderboard by modified_score descending to get the top scores first.
-                    // the req api call is hardcoded to sort by rank, so no sort or filter is necessary here for nomods.
-                    if (modifier == "3")
-                    {
-                        // SPIN
-                        // Filter for spin bits (1, 2, 4, 8), and sort descending by modified score, best scores first.
-                        //personal_leaderboard = personal_leaderboard.GroupBy(x => x.leaderboard.beatmap.id).Select(x => x.OrderByDescending(y => y.modified_score).Where(x => ((int)x.modifiers & (1 | 2 | 4 | 8)) != 0).First()).ToList();
-                        personal_leaderboard = personal_leaderboard.Where(x => ((int)x.modifiers & (1 | 2 | 4 | 8)) != 0).GroupBy(x => x.leaderboard.beatmap.id).Select(x => x.OrderByDescending(y => y.modified_score).FirstOrDefault()).ToList();
-                    }
-                    else if (modifier == "4")
-                    {
-                        // SPIRAL
-                        // Filter for spiral bits (SpinMild = 131072, SpiralStyled = 262144, SpiralWild = 524288), and sort descending by modified score, best scores first.
-                        //personal_leaderboard = personal_leaderboard.GroupBy(x => x.leaderboard.beatmap.id).Select(x => x.OrderByDescending(y => y.modified_score).Where(x => ((int)x.modifiers & (1 | 2 | 4 | 8)) != 0).First()).ToList();
-                        personal_leaderboard = personal_leaderboard.Where(x => ((int)x.modifiers & (131072 | 262144 | 524288)) != 0).GroupBy(x => x.leaderboard.beatmap.id).Select(x => x.OrderByDescending(y => y.modified_score).FirstOrDefault()).ToList();
-                    }
-                    else //if (modifier == "2") or anything else, just give the combined leaderboard. All queries, whether nomod, single mod, or combinations, can be sorted by modified_score.
-                    {
-                        // COMBINED
-                        // personal_leaderboard = personal_leaderboard.GroupBy(x => x.leaderboard.beatmap.id).Select(x => x.OrderBy(y => y.rank_combined).First()).ToList();
-                        // personal_leaderboard = personal_leaderboard.GroupBy(x => x.leaderboard.beatmap.id).Select(x => x.OrderByDescending(y => y.modified_score).First()).ToList();
-                        personal_leaderboard = personal_leaderboard.GroupBy(x => x.leaderboard.beatmap.id).Select(x => x.OrderByDescending(y => y.modified_score).Where(x => x.modified_score > 0).First()).ToList();
-                    }
-
-
-                    //RECALCULATE AVERAGES HERE FROM PERSONAL LEADERBOARD
-                    //userid = rankings[index].profile.id;
-                    //average_rank = rankings[index].rank_avg;
-
-                    //average_poor = rankings[index].poor_hit_percent;
-                    //average_good = rankings[index].good_hit_percent;
-                    //average_perfect = rankings[index].perfect_hit_percent;
-
-                    //average_accuracy = average_poor * 0.25 + average_good * 0.5 + average_perfect;
 
                     // **************************************************************************************
                     // Analyze the performance and ranking of played maps for opportunities to improve
@@ -671,6 +702,7 @@ namespace RailGrinder
                                             }
                                             jbolts = j.modified_score.ToString()+ jbolts;
                                             Console.WriteLine(num.ToString().PadRight(5, ' ') + "    " + jbolts.PadRight(14, ' ') + "    " + j.modifiers.ToString().PadRight(6, ' ') + "    " + j.name);
+                                            Console.ForegroundColor = ConsoleColor.White;
                                             if (num > 9) { break; }
                                         }
                                     }
@@ -739,6 +771,12 @@ namespace RailGrinder
 
                             }
 
+                            if (modifier == "3" || modifier == "4") //update rank average and stddev now that we know what they are.
+                            {
+                                average_rank_combined = personal_leaderboard.Average(x => (double)((JToken)x)["rank_combined"]);
+                                stddev_rank_combined = StandardDeviation(personal_leaderboard.Select(x => (double)((JToken)x)["rank_combined"]));
+                            }
+
                             //**********
                             //Check: Should we be using modified or base? 
                             //Modified_score will be the same regardless for modifiers=="0" for the filtered leaderboard, so should this be using modified_score for the average, too?
@@ -794,6 +832,9 @@ namespace RailGrinder
                         Console.ForegroundColor = ConsoleColor.White;
                         Console.WriteLine("");
                         Console.WriteLine("");
+                        Console.Write("\u001b[4m"); // Underline
+                        Console.Write(SummaryHeading + ", Played Maps:");
+                        Console.WriteLine("\u001b[0m"); // Reset
                         Console.WriteLine("Results (best at the top): ");
                         results = results.OrderBy(x => x.rank).ToList();
                         foreach (var res in results)
@@ -820,8 +861,12 @@ namespace RailGrinder
                         // ***********************************************************
                         // Display an ordered list of maps, from highest to lower potential gain
                         // ***********************************************************
+                        Console.ForegroundColor = ConsoleColor.White;
                         Console.WriteLine("");
                         Console.WriteLine("");
+                        Console.Write("\u001b[4m"); // Underline
+                        Console.Write(SummaryHeading + ", Played Maps:");
+                        Console.WriteLine("\u001b[0m"); // Reset
                         Console.WriteLine("Results (most opportunity for improvement at the top): ");
                         //results = results.OrderByDescending(x => x.rank).ToList();
                         results = results.OrderBy(x => x.ratio).ToList();
@@ -951,7 +996,9 @@ namespace RailGrinder
 
                         Console.ForegroundColor = ConsoleColor.White;
                         Console.WriteLine("");
-                        Console.WriteLine("Estimated rank for unplayed maps: ");
+                        Console.Write("\u001b[4m"); // Underline
+                        Console.Write(SummaryHeading + ", Estimated rank for unplayed maps:");
+                        Console.WriteLine("\u001b[0m"); // Reset
                         results = results.OrderBy(x => (int)x.rank).ToList();
                         foreach (var res in results)
                         {
@@ -984,11 +1031,23 @@ namespace RailGrinder
             } //closing using webclient
             Console.ForegroundColor = ConsoleColor.White;
             Console.WriteLine("");
-            Console.WriteLine("Average Poor:     " + average_poor.ToString("n4"));
-            Console.WriteLine("Average Good:     " + average_good.ToString("n4"));
-            Console.WriteLine("Average Perfect:  " + average_perfect.ToString("n4"));
-            Console.WriteLine("Average Accuracy: " + average_accuracy.ToString("n4"));
-            Console.WriteLine("Average Rank:     " + average_rank.ToString("n2"));
+            Console.Write("\u001b[4m"); // Underline
+            Console.Write(SummaryHeading + ", Statistics:");
+            Console.WriteLine("\u001b[0m"); // Reset
+            Console.WriteLine($"Average Poor:          {average_poor:n4} (σ {stddev_poor:n4})");
+            Console.WriteLine($"Average Good:          {average_good:n4} (σ {stddev_good:n4})");
+            Console.WriteLine($"Average Perfect:       {average_perfect:n4} (σ {stddev_perfect:n4})");
+            Console.WriteLine($"Average Accuracy:      {average_accuracy:n4} (σ {stddev_accuracy:n4})");
+
+            if (modifier == "1") //Display modifier-specific rank
+            {
+                Console.WriteLine($"Average Rank:          {average_rank:n2}   (σ {stddev_rank:n2})");
+                //Console.WriteLine("Average Rank:         " + average_rank.ToString("n2") + " (σ " + stddev_rank.ToString("n2") + ")");
+            }
+            else //Display combined rank (overall, overall spin, or overall spiral)
+            {
+                Console.WriteLine($"Average Combined Rank: {average_rank:n2}   (σ {stddev_rank_combined:n2})");
+            }
             WriteFile("scores/" + userid + "" + difficulty + "" + mode + "" + modifiers + ".csv");
 
             Console.WriteLine("");
@@ -1015,6 +1074,14 @@ namespace RailGrinder
             {
                 sw.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + ", " + average_accuracy + ", " + average_perfect + ", " + average_good + ", " + average_poor + ", " + average_rank);
             }
+        }
+
+        // Helper function StandardDeviation returns the standard deviation of a value.
+        static double StandardDeviation(IEnumerable<double> values)
+        {
+            double avg = values.Average();
+            double sumSquares = values.Sum(v => Math.Pow(v - avg, 2));
+            return Math.Sqrt(sumSquares / values.Count());
         }
     }
 }
